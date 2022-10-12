@@ -9,13 +9,119 @@ var GENESIS = '0x000000000000000000000000000000000000000000000000000000000000000
 
 // This is the ABI for your contract (get it from Remix, in the 'Compile' tab)
 // ============================================================
-var abi = []; // FIXME: fill this in with your contract's ABI //Be sure to only have one array, not two
+var abi = [
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "_creditor",
+				"type": "address"
+			},
+			{
+				"internalType": "int32",
+				"name": "_amount",
+				"type": "int32"
+			}
+		],
+		"name": "add_IOU",
+		"outputs": [
+			{
+				"internalType": "bool",
+				"name": "res",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "getLedger",
+		"outputs": [
+			{
+				"components": [
+					{
+						"components": [
+							{
+								"internalType": "address",
+								"name": "creditor",
+								"type": "address"
+							},
+							{
+								"internalType": "int32",
+								"name": "amount",
+								"type": "int32"
+							},
+							{
+								"internalType": "uint256",
+								"name": "creditor_id",
+								"type": "uint256"
+							},
+							{
+								"internalType": "bool",
+								"name": "_valid",
+								"type": "bool"
+							}
+						],
+						"internalType": "struct SplitWise.IOU[]",
+						"name": "IOUs",
+						"type": "tuple[]"
+					},
+					{
+						"internalType": "address",
+						"name": "debtor",
+						"type": "address"
+					},
+					{
+						"internalType": "uint256",
+						"name": "id",
+						"type": "uint256"
+					},
+					{
+						"internalType": "bool",
+						"name": "_valid",
+						"type": "bool"
+					}
+				],
+				"internalType": "struct SplitWise.Debtor[]",
+				"name": "_ledgerArr",
+				"type": "tuple[]"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "debtor",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "creditor",
+				"type": "address"
+			}
+		],
+		"name": "lookup",
+		"outputs": [
+			{
+				"internalType": "int32",
+				"name": "ret",
+				"type": "int32"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	}
+]; // FIXME: fill this in with your contract's ABI //Be sure to only have one array, not two
 
 // ============================================================
 abiDecoder.addABI(abi);
 // call abiDecoder.decodeMethod to use this - see 'getAllFunctionCalls' for more
 
-var contractAddress = ''; // FIXME: fill this in with your contract's address/hash
+var contractAddress = '0xb8297dc1A083FB66472667AEaE4bA17E27794e7c'; // FIXME: fill this in with your contract's address/hash
 var BlockchainSplitwise = new web3.eth.Contract(abi, contractAddress);
 
 // =============================================================================
@@ -23,33 +129,104 @@ var BlockchainSplitwise = new web3.eth.Contract(abi, contractAddress);
 // =============================================================================
 
 // TODO: Add any helper functions here!
+async function getLedger() {
+	return BlockchainSplitwise.methods.getLedger().call({from: web3.eth.defaultAccount});
+}
 
+async function find_creditor(node){
+	let retLedger = await getLedger();
+	var idx = 0, debtorExist = false;
+	var neighbors = [];
+	for (var i = 0; i < retLedger.length; i++){ // find for which node we're finding its neighbors
+		if (retLedger[i]["debtor"].toLowerCase() == node.toLowerCase()){
+			idx = i;
+			debtorExist = true;
+			break;
+		}
+	}
+	if (debtorExist){
+		for (var j = 0; j < retLedger[idx]["IOUs"].length; j++){
+			if (retLedger[idx]["IOUs"][j]["_valid"])
+				neighbors.push({"creditor": retLedger[idx]["IOUs"][j]["creditor"], "amount": retLedger[idx]["IOUs"][j]["amount"]});
+		}
+	}
+	return neighbors;
+}
 // TODO: Return a list of all users (creditors or debtors) in the system
 // You can return either:
 //   - a list of everyone who has ever sent or received an IOU
 // OR
 //   - a list of everyone currently owing or being owed money
 async function getUsers() {
-
+	let retLedger = await getLedger();
+	var users = new Set();
+	for (var i = 0; i < retLedger.length; i++){
+		users.add(retLedger[i].debtor);
+		for (var j = 0; j < retLedger[i].IOUs.length; j++){
+			users.add(retLedger[i]["IOUs"][j]["creditor"]);
+		}
+	}
+	return Array.from(users);
 }
 
 // TODO: Get the total amount owed by the user specified by 'user'
 async function getTotalOwed(user) {
-
+	let neighbors = await find_creditor(user);
+	var amount = 0;
+	for (var i = 0; i < neighbors.length; i++){
+		amount += parseInt(neighbors[i]["amount"], 10);
+	}
+	return amount;
 }
 
 // TODO: Get the last time this user has sent or received an IOU, in seconds since Jan. 1, 1970
 // Return null if you can't find any activity for the user.
 // HINT: Try looking at the way 'getAllFunctionCalls' is written. You can modify it if you'd like.
 async function getLastActive(user) {
+	var curBlock = await web3.eth.getBlockNumber();
 
+	while (curBlock !== GENESIS) {
+		var b = await web3.eth.getBlock(curBlock, true);
+		var timestamp = b.timestamp;
+		var txns = b.transactions;
+		for (var j = 0; j < txns.length; j++) {
+			var txn = txns[j];
+			if (txn.to == null || txn.from == null) {
+				return null;
+			}
+			// check that destination of txn is our contract
+			if (txn.to.toLowerCase() === user.toLowerCase() || txn.from.toLowerCase() === user.toLowerCase() ) {
+				return timestamp;
+			}
+		}
+		curBlock = b.parentHash;
+	}
+	return null;
 }
 
 // TODO: add an IOU ('I owe you') to the system
 // The person you owe money is passed as 'creditor'
 // The amount you owe them is passed as 'amount'
 async function add_IOU(creditor, amount) {
-
+	var ret = await doBFS(creditor, web3.eth.defaultAccount, find_creditor); // start is creditor, end is debtor
+	amount = parseInt(amount, 10);
+	var response = false;
+	if (ret != null){
+		let {loop, smallestAmountOwed} = ret;
+		smallestAmountOwed = Math.min(parseInt(smallestAmountOwed, 10), amount);
+		for (var i = 0; i < loop.length; i++){ // check if minus the smallest results to 0
+			if (loop[i]["amount"] - smallestAmountOwed < 0){
+				console.log("tx results to negative IOU.");
+				return;
+			}
+		}
+		for (var i = 0; i < loop.length - 1; i++){
+			response = await BlockchainSplitwise.methods.add_IOU(loop[i + 1]["creditor"], -smallestAmountOwed).send({from: loop[i]["creditor"], gas: 500000});
+		}
+		response = await BlockchainSplitwise.methods.add_IOU(creditor, amount - smallestAmountOwed).send({from: web3.eth.defaultAccount, gas: 500000});
+	} else {
+		response = await BlockchainSplitwise.methods.add_IOU(creditor, amount).send({from: web3.eth.defaultAccount, gas: 500000}); // refer to dev note for this magic gas limit
+	}
 }
 
 // =============================================================================
@@ -95,14 +272,19 @@ async function getAllFunctionCalls(addressOfContract, functionName) {
 // It will find a path from start to end (or return null if none exists)
 // You just need to pass in a function ('getNeighbors') that takes a node (string) and returns its neighbors (as an array)
 async function doBFS(start, end, getNeighbors) {
-	var queue = [[start]];
+	var queue = [[{"creditor": start, "amount": Number.MAX_SAFE_INTEGER}]]; // queue is a struct array
+	var smallestAmountOwed = Number.MAX_SAFE_INTEGER;
 	while (queue.length > 0) {
 		var cur = queue.shift();
 		var lastNode = cur[cur.length-1]
-		if (lastNode === end) {
-			return cur;
+		if (lastNode["creditor"] === end) {
+			for (var i = 0; i < cur.length; i++) {
+				if (parseInt(cur[i]["amount"], 10) < parseInt(smallestAmountOwed, 10))
+					smallestAmountOwed = cur[i]["amount"];
+			}
+			return {"loop": cur, "smallestAmountOwed": smallestAmountOwed};
 		} else {
-			var neighbors = await getNeighbors(lastNode);
+			var neighbors = await getNeighbors(lastNode["creditor"]);
 			for (var i = 0; i < neighbors.length; i++) {
 				queue.push(cur.concat([neighbors[i]]));
 			}
@@ -110,6 +292,7 @@ async function doBFS(start, end, getNeighbors) {
 	}
 	return null;
 }
+
 
 // =============================================================================
 //                                      UI
@@ -230,4 +413,4 @@ async function sanityCheck() {
 	console.log("Final Score: " + score +"/21");
 }
 
-//sanityCheck() //Uncomment this line to run the sanity check when you first open index.html
+// sanityCheck() //Uncomment this line to run the sanity check when you first open index.html
